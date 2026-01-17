@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { parseTasksFromMarkdown } = require('../lib/tasksParser');
@@ -19,4 +19,21 @@ test('falls back to checkbox items', () => {
     tasks.map((t) => t.title),
     ['One', 'Two']
   );
+});
+
+test('ignores tasks inside fenced code blocks', () => {
+  const md = [
+    '```md',
+    '## Task: Hidden',
+    '',
+    'This should not be parsed as a task.',
+    '```',
+    '',
+    '## Task: Visible',
+    '',
+    'This should be parsed.',
+  ].join('\n');
+  const tasks = parseTasksFromMarkdown(md);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].title, 'Visible');
 });

@@ -44,12 +44,15 @@ In Vibe Kanban task descriptions (or via MCP `create_task`), use:
 ## CLI
 
 - `vkflow init [--tools <openspec-tools>] [--seed-tags] [--vk-url <url>]`
+- `vkflow new-change --change <name> [--description <text>] [--schema <name>] [--force]`
+- `vkflow plan-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>]`
 - `vkflow seed-tags [--vk-url <url>] [--no-overwrite]`
-- `vkflow import-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>] [--dry-run] [--allow-duplicates]`
+- `vkflow import-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>] [--dry-run] [--allow-duplicates] [--no-superpowers]`
 
 Notes:
 - If `--project-id` is omitted, `import-change` will **prompt you to select** a Vibe Kanban project.
 - Imports are **idempotent by default**: re-running `import-change` will skip tasks already imported for the same change. Use `--allow-duplicates` to force re-import.
+- Imported tasks include Superpowers TDD guardrails by default; disable with `--no-superpowers`.
 
 ## License
 

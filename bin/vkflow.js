@@ -14,7 +14,7 @@ const {
   upsertTag,
   createTask,
 } = require('../lib/vk');
-const { runOpenSpecInit } = require('../lib/openspec');
+const { runOpenSpecInit, runOpenSpecNewChange } = require('../lib/openspec');
 const { parseTasksFromMarkdown } = require('../lib/tasksParser');
 const {
   computeTaskId,
@@ -68,8 +68,10 @@ function printHelp() {
 
 Commands:
   init [--tools <openspec-tools>] [--seed-tags] [--vk-url <url>] [--force]
+  new-change --change <name> [--description <text>] [--schema <name>] [--force]
+  plan-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>] [--allow-duplicates]
   seed-tags [--vk-url <url>] [--no-overwrite]
-  import-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>] [--tasks-file <path>] [--dry-run] [--allow-duplicates]
+  import-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>] [--tasks-file <path>] [--dry-run] [--allow-duplicates] [--no-superpowers]
 
 Notes:
 - Vibe Kanban URL auto-detection checks: --vk-url, VIBE_BACKEND_URL, BACKEND_PORT/PORT, or temp port file.
@@ -88,6 +90,20 @@ function fileExists(p) {
 
 function normalizeString(s) {
   return String(s ?? '').trim().toLowerCase();
+}
+
+let cachedTagCatalog = null;
+function getTagContent(tagName) {
+  if (!cachedTagCatalog) {
+    cachedTagCatalog = loadTagCatalog();
+  }
+
+  const tag = cachedTagCatalog.tags.find((t) => t.tag_name === tagName);
+  if (!tag) {
+    throw new Error(`Unknown tag: ${tagName}`);
+  }
+
+  return String(tag.content || '').trim();
 }
 
 function formatProjectLine(project, index) {
@@ -236,6 +252,136 @@ async function cmdInit(flags) {
   }
 }
 
+async function cmdNewChange(flags, positionals) {
+  const cwd = process.cwd();
+  const change = flags.change || positionals?.[0];
+  const description = typeof flags.description === 'string' ? flags.description : undefined;
+  const schema = typeof flags.schema === 'string' ? flags.schema : undefined;
+  const force = flags.force === true;
+
+  if (!change) {
+    throw new Error('new-change requires --change <name>');
+  }
+
+  const openSpecDir = path.join(cwd, 'openspec');
+  if (!fileExists(openSpecDir)) {
+    throw new Error('OpenSpec not initialized in this repo. Run: vkflow init');
+  }
+
+  const changeDir = path.join(openSpecDir, 'changes', change);
+  if (!fileExists(changeDir)) {
+    runOpenSpecNewChange({ name: change, description, schema });
+  }
+
+  const tasksPath = path.join(changeDir, 'tasks.md');
+  const proposalPath = path.join(changeDir, 'proposal.md');
+
+  if (!fileExists(tasksPath) || force) {
+    const tasksFormat = getTagContent('vkflow_tasks_format');
+    const content = [
+      `# Tasks: ${change}`,
+      '',
+      'Fill this file with tasks. When ready, import to Vibe Kanban:',
+      `- vkflow import-change --change ${change}`,
+      '',
+      'Use this format:',
+      '',
+      '```md',
+      tasksFormat,
+      '```',
+      '',
+    ].join('\n');
+    writeText(tasksPath, content, { force: true });
+  }
+
+  if (!fileExists(proposalPath) || force) {
+    const prd = getTagContent('openspec_prd');
+    const content = [
+      `# Proposal: ${change}`,
+      '',
+      'Draft the PRD/proposal below:',
+      '',
+      '```md',
+      prd,
+      '```',
+      '',
+    ].join('\n');
+    writeText(proposalPath, content, { force: true });
+  }
+
+  process.stdout.write('\nChange ready:\n');
+  process.stdout.write(`- ${tasksPath}\n`);
+  process.stdout.write(`- ${proposalPath}\n`);
+}
+
+async function cmdPlanChange(flags, positionals) {
+  const baseUrl = resolveVkBaseUrl({ vkUrl: flags['vk-url'] });
+  const change = flags.change || positionals?.[0];
+
+  if (!change) {
+    throw new Error('plan-change requires --change <name>');
+  }
+
+  // Ensure the change exists locally (creates skeleton files if missing).
+  await cmdNewChange(flags, positionals || []);
+
+  const projectId = await resolveProjectId(flags, baseUrl);
+  const allowDuplicates = flags['allow-duplicates'] === true;
+
+  const existing = await listTasks(baseUrl, { projectId });
+  for (const t of existing || []) {
+    const markers = extractVkflowMarkers(t.description);
+    if (markers && markers.change === change && markers.task === 'plan') {
+      if (!allowDuplicates) {
+        process.stdout.write(
+          `skipped  Plan task already exists for change '${change}'\n`
+        );
+        return;
+      }
+      break;
+    }
+  }
+
+  const markerChange = makeChangeMarker(change);
+  const prd = getTagContent('openspec_prd');
+  const tasksFormat = getTagContent('vkflow_tasks_format');
+  const planningPrompt = getTagContent('vkflow_plan');
+
+  const body = [
+    markerChange,
+    makeTaskMarker('plan'),
+    '',
+    `# Plan change: ${change}`,
+    '',
+    'Goal: produce OpenSpec proposal + tasks, then import tasks into Vibe Kanban.',
+    '',
+    '## Prompt',
+    planningPrompt,
+    '',
+    '## PRD template',
+    '```md',
+    prd,
+    '```',
+    '',
+    '## tasks.md format',
+    '```md',
+    tasksFormat,
+    '```',
+    '',
+    '## Next',
+    `- Run: vkflow import-change --change ${change}`,
+    '',
+  ].join('\n');
+
+  await createTask(baseUrl, {
+    project_id: projectId,
+    title: `Plan: ${change}`,
+    description: body,
+  });
+
+  process.stdout.write(`created  Plan: ${change}\n`);
+}
+
 async function cmdImportChange(flags) {
   const baseUrl = resolveVkBaseUrl({ vkUrl: flags['vk-url'] });
   const change = flags.change;
@@ -264,6 +410,8 @@ async function cmdImportChange(flags) {
   }
 
   const allowDuplicates = flags['allow-duplicates'] === true;
+  const embedSuperpowers = flags.superpowers !== false;
+  const superpowers = embedSuperpowers ? getTagContent('superpowers_tdd') : null;
 
   const markerChange = makeChangeMarker(change);
 
@@ -307,8 +455,7 @@ async function cmdImportChange(flags) {
       '---',
       `Spec: openspec/changes/${change}`,
       '',
-      'Execution:',
-      '- Follow TDD + small steps (see @superpowers_tdd)',
+      embedSuperpowers ? superpowers : undefined,
     ]
       .filter((s) => s !== undefined)
       .join('\n')
@@ -329,7 +476,7 @@ async function cmdImportChange(flags) {
 }
 
 async function main() {
-  const { command, flags } = parseCli(process.argv);
+  const { command, flags, positionals } = parseCli(process.argv);
 
   if (command === 'help' || command === '--help' || command === '-h') {
     printHelp();
@@ -338,6 +485,16 @@ async function main() {
 
   if (command === 'init') {
     await cmdInit(flags);
+    return;
+  }
+
+  if (command === 'new-change') {
+    await cmdNewChange(flags, positionals);
+    return;
+  }
+
+  if (command === 'plan-change') {
+    await cmdPlanChange(flags, positionals);
     return;
   }
 

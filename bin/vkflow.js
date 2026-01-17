@@ -2,13 +2,26 @@
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('node:readline/promises');
 
 const { ensureDir, readText, writeText } = require('../lib/fs');
 const { assetPath } = require('../lib/paths');
 const { loadTagCatalog } = require('../lib/tagCatalog');
-const { resolveVkBaseUrl, upsertTag, createTask } = require('../lib/vk');
+const {
+  resolveVkBaseUrl,
+  listProjects,
+  listTasks,
+  upsertTag,
+  createTask,
+} = require('../lib/vk');
 const { runOpenSpecInit } = require('../lib/openspec');
 const { parseTasksFromMarkdown } = require('../lib/tasksParser');
+const {
+  computeTaskId,
+  extractVkflowMarkers,
+  makeChangeMarker,
+  makeTaskMarker,
+} = require('../lib/vkflowMarkers');
 
 function parseCli(argv) {
   const args = argv.slice(2);
@@ -56,7 +69,7 @@ function printHelp() {
 Commands:
   init [--tools <openspec-tools>] [--seed-tags] [--vk-url <url>] [--force]
   seed-tags [--vk-url <url>] [--no-overwrite]
-  import-change --change <name> --project-id <uuid> [--vk-url <url>] [--tasks-file <path>] [--dry-run]
+  import-change --change <name> [--project-id <uuid> | --project <name>] [--vk-url <url>] [--tasks-file <path>] [--dry-run] [--allow-duplicates]
 
 Notes:
 - Vibe Kanban URL auto-detection checks: --vk-url, VIBE_BACKEND_URL, BACKEND_PORT/PORT, or temp port file.
@@ -71,6 +84,89 @@ function fileExists(p) {
   } catch {
     return false;
   }
+}
+
+function normalizeString(s) {
+  return String(s ?? '').trim().toLowerCase();
+}
+
+function formatProjectLine(project, index) {
+  const id = String(project.id || '');
+  const shortId = id.length > 8 ? `${id.slice(0, 8)}…` : id;
+  return `[${String(index + 1).padStart(2, ' ')}] ${project.name} (${shortId})`;
+}
+
+async function promptSelectProject(projects) {
+  if (!process.stdin.isTTY) {
+    throw new Error(
+      'No TTY available. Pass --project-id <uuid> or --project <name>.'
+    );
+  }
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    process.stdout.write('Select a Vibe Kanban project:\n');
+    for (let i = 0; i < projects.length; i++) {
+      process.stdout.write(`  ${formatProjectLine(projects[i], i)}\n`);
+    }
+
+    // Loop until we get a valid selection.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const answer = await rl.question(
+        `\nEnter a number (1-${projects.length}, or 'q' to quit): `
+      );
+      const trimmed = answer.trim();
+      if (trimmed.toLowerCase() === 'q') {
+        throw new Error('Aborted.');
+      }
+      const n = Number(trimmed);
+      if (!Number.isInteger(n) || n < 1 || n > projects.length) {
+        process.stdout.write('Invalid selection. Try again.\n');
+        continue;
+      }
+      return projects[n - 1].id;
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+async function resolveProjectId(flags, baseUrl) {
+  const projectIdFlag = flags['project-id'];
+  if (typeof projectIdFlag === 'string' && projectIdFlag.trim()) {
+    return projectIdFlag.trim();
+  }
+
+  const projects = await listProjects(baseUrl);
+  if (!Array.isArray(projects) || projects.length === 0) {
+    throw new Error('No Vibe Kanban projects found.');
+  }
+
+  const projectQuery = typeof flags.project === 'string' ? flags.project : null;
+  if (projectQuery && projectQuery.trim()) {
+    const q = normalizeString(projectQuery);
+    const matches = projects.filter((p) => normalizeString(p.name).includes(q));
+
+    if (matches.length === 0) {
+      const names = projects.map((p) => p.name).join(', ');
+      throw new Error(
+        `No projects matched --project ${JSON.stringify(projectQuery)}. Available: ${names}`
+      );
+    }
+
+    if (matches.length === 1) {
+      return matches[0].id;
+    }
+
+    return promptSelectProject(matches);
+  }
+
+  return promptSelectProject(projects);
 }
 
 async function cmdSeedTags(flags) {
@@ -143,11 +239,12 @@ async function cmdInit(flags) {
 async function cmdImportChange(flags) {
   const baseUrl = resolveVkBaseUrl({ vkUrl: flags['vk-url'] });
   const change = flags.change;
-  const projectId = flags['project-id'];
 
-  if (!change || !projectId) {
-    throw new Error('import-change requires --change <name> and --project-id <uuid>');
+  if (!change) {
+    throw new Error('import-change requires --change <name>');
   }
+
+  const projectId = await resolveProjectId(flags, baseUrl);
 
   const cwd = process.cwd();
   const tasksFile =
@@ -166,16 +263,45 @@ async function cmdImportChange(flags) {
     throw new Error('No tasks found in tasks.md. Use @vkflow_tasks_format.');
   }
 
+  const allowDuplicates = flags['allow-duplicates'] === true;
+
+  const markerChange = makeChangeMarker(change);
+
+  const existing = await listTasks(baseUrl, { projectId });
+  const existingTaskIds = new Set();
+  for (const t of existing || []) {
+    const markers = extractVkflowMarkers(t.description);
+    if (markers && markers.change === change && markers.task) {
+      existingTaskIds.add(markers.task);
+    }
+  }
+
   if (flags['dry-run']) {
-    process.stdout.write(`Would create ${tasks.length} tasks in project ${projectId}:\n`);
+    process.stdout.write(
+      `Would create ${tasks.length} tasks in project ${projectId}:\n`
+    );
     for (const t of tasks) {
       process.stdout.write(`- ${t.title}\n`);
     }
     return;
   }
 
+  let created = 0;
+  let skipped = 0;
+
   for (const t of tasks) {
+    const taskId = computeTaskId({ title: t.title, description: t.description });
+
+    if (!allowDuplicates && existingTaskIds.has(taskId)) {
+      skipped++;
+      process.stdout.write(`skipped  ${t.title}\n`);
+      continue;
+    }
+
     const description = [
+      markerChange,
+      makeTaskMarker(taskId),
+      '',
       t.description,
       '',
       '---',
@@ -194,10 +320,12 @@ async function cmdImportChange(flags) {
       description,
     });
 
+    existingTaskIds.add(taskId);
+    created++;
     process.stdout.write(`created  ${t.title}\n`);
   }
 
-  process.stdout.write(`\nDone. Imported ${tasks.length} tasks.\n`);
+  process.stdout.write(`\nDone. created=${created} skipped=${skipped}\n`);
 }
 
 async function main() {

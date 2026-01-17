@@ -1,6 +1,6 @@
 ﻿{
   "name": "vk-workflow-kit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bootstrap OpenSpec + Superpowers prompts + Vibe Kanban tags/tasks for spec-driven AI-assisted development.",
   "license": "MIT",
   "repository": {

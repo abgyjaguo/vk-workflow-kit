@@ -4,12 +4,13 @@
 
 - CLI: `init`, `seed-tags`, `import-change`
 - Default tag pack (PRD + planning + tasks format + TDD + archive)
+- `import-change` project selection (prompt or `--project`)
+- `import-change` idempotent imports (skip duplicates by default)
 
 ## v0.2
 
-- Interactive project selection (fetch projects from VK)
-- Import with idempotency (avoid duplicate tasks)
 - Optional: include tag expansion in imported task bodies
+- Import “update existing” mode (sync task descriptions)
 
 ## v0.3
 

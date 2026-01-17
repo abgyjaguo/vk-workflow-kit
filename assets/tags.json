@@ -1,0 +1,10 @@
+﻿{
+  "version": 1,
+  "tags": [
+    {"tag_name": "openspec_prd", "file": "tags/openspec_prd.md"},
+    {"tag_name": "vkflow_plan", "file": "tags/vkflow_plan.md"},
+    {"tag_name": "vkflow_tasks_format", "file": "tags/vkflow_tasks_format.md"},
+    {"tag_name": "superpowers_tdd", "file": "tags/superpowers_tdd.md"},
+    {"tag_name": "vkflow_archive", "file": "tags/vkflow_archive.md"}
+  ]
+}

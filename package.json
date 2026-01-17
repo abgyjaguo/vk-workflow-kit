@@ -1,0 +1,33 @@
+﻿{
+  "name": "vk-workflow-kit",
+  "version": "0.1.0",
+  "description": "Bootstrap OpenSpec + Superpowers prompts + Vibe Kanban tags/tasks for spec-driven AI-assisted development.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abgyjaguo/vk-workflow-kit.git"
+  },
+  "homepage": "https://github.com/abgyjaguo/vk-workflow-kit#readme",
+  "bugs": {
+    "url": "https://github.com/abgyjaguo/vk-workflow-kit/issues"
+  },
+  "type": "commonjs",
+  "bin": {
+    "vk-workflow-kit": "bin/vkflow.js",
+    "vkflow": "bin/vkflow.js"
+  },
+  "files": [
+    "bin/**",
+    "lib/**",
+    "assets/**",
+    "docs/**",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
